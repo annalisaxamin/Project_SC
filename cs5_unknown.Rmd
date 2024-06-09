@@ -955,7 +955,7 @@ However, this chunck generates the following error and it wasn't possible to inf
 
 `Error in Z[cell_markers_genes_score[jj, "gene_"], ] : subscript out of bounds`
 
-## Conclusion
+### Comparison between ScType and SingleR results
 
 As it can be observed from the plots reported below, the ScType annotation results to be more precise and able to assign a label to each cluster.
 ```{r}

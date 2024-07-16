@@ -904,7 +904,7 @@ es.max <- sctype_score(scRNAseqData = XRA[["RNA"]]$scale.data,
                        # in case there are no negative markers just set gs2 = NULL
 
 # merge by cluster
-cL_resutls <- do.call("rbind",
+cL_results <- do.call("rbind",
                       lapply(unique(XRA@meta.data$seurat_clusters),
                              function(cl){
                                es.max.cl = sort(rowSums(es.max[ ,rownames(XRA@meta.data[XRA@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
@@ -914,7 +914,7 @@ cL_resutls <- do.call("rbind",
                                                ncells = sum(XRA@meta.data$seurat_clusters==cl)), 10)
                                }))
 
-sctype_scores <- cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+sctype_scores <- cL_results %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
 ```
 
 #### Assign cell types to each cluster
@@ -934,6 +934,18 @@ pdf("img/23_DimPlot_scType.pdf")
 DimPlot(XRA, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'scType_labels')  
 dev.off()
 ```
+
+
+#### Comparison between ScType and SingleR results
+
+As it can be observed from the plots reported below, the ScType annotation results to be more precise and able to assign a label to each cluster.
+```{r}
+DimPlot(XRA, group.by = "SingleR_human_labels")
+```
+```{r}
+DimPlot(XRA, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'scType_labels') 
+```
+
 
 #### Automatically detect a tissue type of the dataset
 `ScType` provides a functionality for automated guessing of a tissue type given in input a unknown dataset.
@@ -955,15 +967,90 @@ However, this chunck generates the following error and it wasn't possible to inf
 
 `Error in Z[cell_markers_genes_score[jj, "gene_"], ] : subscript out of bounds`
 
-### Comparison between ScType and SingleR results
-
-As it can be observed from the plots reported below, the ScType annotation results to be more precise and able to assign a label to each cluster.
+To overcome this error, an attempt with the following chunck was made, implementing a for loop aiming to get tissue type of the dataset.
 ```{r}
-DimPlot(XRA, group.by = "SingleR_human_labels")
-```
-```{r}
-DimPlot(XRA, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'scType_labels') 
+# DB file
+db_ <- "https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/ScTypeDB_full.xlsx"
+#db_ <- "ScTypeDB_full.xlsx"
+
+tissue <- c("Brain","Immune system","Pancreas","Liver","Eye","Kidney","Brain","Lung","Adrenal","Heart","Intestine","Muscle","Placenta","Spleen","Stomach","Thymus")
+tissue
+
+# Load gene set preparation function
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R")
+
+# Load cell type annotation function
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
+
+# Initialize a list to store sctype_scores for each tissue
+sctype_scores_list <- list()
+score_sum_list <- list()  # Initialize a list to store sum of scores for each tissue
+
+# Loop over each tissue
+for (t in tissue) {
+  cat("Now analyzing for tissue", t, "...\n")  # Print current tissue being analyzed
+  # Prepare gene sets for the current tissue
+  gs_list <- gene_sets_prepare(db_, t)
+  
+  # Calculate ScType scores for the current tissue
+  es.max <- sctype_score(scRNAseqData = XRA[["RNA"]]$scale.data, 
+                         scaled = TRUE, 
+                         gs = gs_list$gs_positive, 
+                         gs2 = NULL) #gs_list$gs_negative
+  
+  # Merge by cluster
+  cL_results <- do.call("rbind", 
+                        lapply(unique(XRA@meta.data$seurat_clusters), 
+                               function(cl){es.max.cl = sort(rowSums(es.max[,rownames(XRA@meta.data[XRA@meta.data$seurat_clusters==cl, ])]), decreasing = TRUE)
+                               head(data.frame(cluster = cl, 
+                                               type = names(es.max.cl), 
+                                               scores = es.max.cl, 
+                                               ncells = sum(XRA@meta.data$seurat_clusters==cl)), 10)
+  }))
+  
+  sctype_scores <- cL_results %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+  
+  # Set low-confident (low ScType score) clusters to "unknown"
+  sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] <- "Unknown"
+  
+  # Store sctype_scores in the list
+  sctype_scores_list[[t]] <- sctype_scores[, 1:3]
+  
+  # Calculate sum of scores for the current tissue and store it in the score_sum_list
+  score_sum_list[[t]] <- sum(sctype_scores$scores)
+  #XRA[["scType_labels"]] <- sctype_scores$type[match(XRA@meta.data$seurat_clusters, sctype_scores$cluster)]
+  #DimPlot(XRA, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'scType_labels') 
+}
+
+# Combine tissue names and corresponding score sums into a data frame
+score_sum_df <- data.frame(tissue = names(score_sum_list), score_sum = unlist(score_sum_list))
+score_sum_df<- score_sum_df %>% 
+  arrange(score_sum)
+score_sum_df
+
+# Create a bar plot using ggplot2 with the ordered dataframe
+ggplot(score_sum_df, aes(x = reorder(tissue, score_sum), y = score_sum, fill = tissue)) +
+  geom_bar(stat = "identity", color = "black",show.legend = FALSE) +
+  labs(title = "Sum of ScType Scores for Each Tissue",
+       x = "Tissue", y = "Sum of Scores") +
+  theme_minimal() +
+  coord_flip()  # Flip the plot
+
 ```
 
+The tissue type of the dataset is the one with the highest ScType score. In this case, from the plot, it is possible to observe that the tissue with higher score is **Liver**. 
+
+```{r, include=FALSE}
+# save plot as pdf
+pdf("img/24_Guess_Tissue.pdf")
+ggplot(score_sum_df, aes(x = reorder(tissue, score_sum), y = score_sum, fill = tissue)) +
+  geom_bar(stat = "identity", color = "black",show.legend = FALSE) +
+  labs(title = "Sum of ScType Scores for Each Tissue",
+       x = "Tissue", y = "Sum of Scores") +
+  theme_minimal() +
+  coord_flip()  # Flip the plot
+
+dev.off()
+```
 
 
